@@ -29,6 +29,7 @@
 #pragma once
 #include "memwipe.h"
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/utility/string_view.hpp>
 
 #include <string>
@@ -136,6 +137,17 @@ namespace net_utils
 				m_etc_fields.clear();
 			}
 		};
+
+		// A web page cannot set a JSON content type on a cross origin request
+		// without a CORS preflight, which the server must allow.
+		inline bool is_json_content_type(const std::string& content_type)
+		{
+			boost::string_view type(content_type);
+			type = type.substr(0, type.find(';'));
+			while(!type.empty() && (type.back() == ' ' || type.back() == '\t'))
+				type.remove_suffix(1);
+			return boost::iequals(type, "application/json");
+		}
 
     struct uri_content
     {

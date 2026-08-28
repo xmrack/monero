@@ -700,8 +700,9 @@ namespace net_utils
 		if (!query_info.m_header_info.m_origin.empty())
 			return is_origin_allowed(query_info.m_header_info.m_origin);
 
-		// A cross origin GET or HEAD carries no Origin, so fall back to fetch metadata,
-		// which a browser always sends and no browser API can forge.
+		// A cross origin GET or HEAD carries no Origin, so fall back to fetch
+		// metadata. Older browsers do not send it, so state changing endpoints
+		// require a JSON content type rather than relying on this.
 		const std::string &site = query_info.m_header_info.m_sec_fetch_site;
 		if (site.empty() || boost::iequals(site, "none") || boost::iequals(site, "same-origin"))
 			return true;
