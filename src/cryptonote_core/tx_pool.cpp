@@ -118,6 +118,15 @@ namespace cryptonote
       if (candidate < next_check.load(std::memory_order_relaxed))
         next_check = candidate;
     }
+
+    // txs kept from an alternative block without verifiable inputs have an untrusted fee:
+    // rank them lowest so they are the first to be pruned
+    double get_fee_rank(const txpool_tx_meta_t &meta)
+    {
+      if (meta.kept_by_block && meta.max_used_block_id == crypto::null_hash)
+        return 0;
+      return meta.fee / (double)(meta.weight ? meta.weight : 1);
+    }
   }
   //---------------------------------------------------------------------------------
   //---------------------------------------------------------------------------------
@@ -256,7 +265,7 @@ namespace cryptonote
             return false;
 
           m_blockchain.add_txpool_tx(id, blob, meta);
-          add_tx_to_transient_lists(id, fee / (double)(tx_weight ? tx_weight : 1), receive_time, !meta.matches(relay_category::broadcasted));
+          add_tx_to_transient_lists(id, get_fee_rank(meta), receive_time, !meta.matches(relay_category::broadcasted));
           lock.commit();
         }
         catch (const std::exception &e)
@@ -419,8 +428,9 @@ namespace cryptonote
           --it;
           continue;
         }
-        // don't prune the kept_by_block ones, they're likely added because we're adding a block with those
-        if (meta.kept_by_block)
+        // don't prune the kept_by_block ones, they're likely added because we're adding a block with those,
+        // unless their inputs could not be verified (speculative txs from an alternative block)
+        if (meta.kept_by_block && meta.max_used_block_id != crypto::null_hash)
         {
           --it;
           continue;
@@ -904,7 +914,7 @@ namespace cryptonote
 
           if (was_just_broadcasted)
             // Make sure the tx gets re-added with an updated time
-            add_tx_to_transient_lists(hash, meta.fee / (double)meta.weight, std::chrono::system_clock::to_time_t(now), false/*sensitive*/);
+            add_tx_to_transient_lists(hash, get_fee_rank(meta), std::chrono::system_clock::to_time_t(now), false/*sensitive*/);
         }
       }
       catch (const std::exception &e)
@@ -1947,7 +1957,7 @@ namespace cryptonote
           MFATAL("Failed to insert key images from txpool tx");
           return false;
         }
-        add_tx_to_transient_lists(txid, meta.fee / (double)meta.weight, meta.receive_time, !meta.matches(relay_category::broadcasted));
+        add_tx_to_transient_lists(txid, get_fee_rank(meta), meta.receive_time, !meta.matches(relay_category::broadcasted));
         m_txpool_weight += meta.weight;
         return true;
       }, true, relay_category::all);
