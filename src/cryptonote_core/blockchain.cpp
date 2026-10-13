@@ -5172,17 +5172,32 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   if (!m_db->can_thread_bulk_indices())
     threads = 1;
 
-  if (threads > 1 && amounts.size() > 1)
+  if (threads > 1)
   {
-    tools::threadpool::waiter waiter(tpool);
-
-    for (size_t i = 0; i < amounts.size(); i++)
+    // split by offset too, as all RingCT inputs share amount 0
+    struct chunk { uint64_t amount; size_t first; std::vector<uint64_t> offsets; std::vector<output_data_t> outputs; };
+    std::vector<chunk> chunks;
+    const size_t chunk_size = std::max<size_t>(1, (n_total_offsets + threads - 1) / threads);
+    for (const uint64_t amount : amounts)
     {
-      uint64_t amount = amounts[i];
-      tpool.submit(&waiter, boost::bind(&Blockchain::output_scan_worker, this, amount, std::cref(offset_map[amount]), std::ref(tx_map[amount])), true);
+      const std::vector<uint64_t> &offsets = offset_map[amount];
+      for (size_t i = 0; i < offsets.size(); i += chunk_size)
+        chunks.push_back({amount, i, std::vector<uint64_t>(offsets.begin() + i, offsets.begin() + std::min(offsets.size(), i + chunk_size)), {}});
     }
+
+    tools::threadpool::waiter waiter(tpool);
+    for (chunk &c : chunks)
+      tpool.submit(&waiter, boost::bind(&Blockchain::output_scan_worker, this, c.amount, std::cref(c.offsets), std::ref(c.outputs)), true);
     if (!waiter.wait())
       return false;
+
+    for (const chunk &c : chunks)
+    {
+      std::vector<output_data_t> &outputs = tx_map[c.amount];
+      // outputs must stay a prefix of the offsets, so stop after a partial chunk
+      if (outputs.size() == c.first)
+        outputs.insert(outputs.end(), c.outputs.begin(), c.outputs.end());
+    }
   }
   else
   {
