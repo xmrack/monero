@@ -283,18 +283,22 @@ namespace rpc
     if (!missed_vec.empty())
     {
       std::unordered_set<crypto::hash> missed_set(missed_vec.begin(), missed_vec.end());
-      std::vector<cryptonote::transaction> pool_txs;
+      std::vector<std::pair<crypto::hash, cryptonote::tx_memory_pool::tx_details>> pool_txs;
 
-      m_core.get_pool_transactions(pool_txs);
+      m_core.get_pool_transactions_info(missed_vec, pool_txs);
 
-      for (const auto& tx : pool_txs)
+      for (const auto& ptx : pool_txs)
       {
-        crypto::hash h = get_transaction_hash(tx);
+        const crypto::hash &h = ptx.first;
+        cryptonote::transaction tx;
 
-        if (missed_set.erase(h))
+        const bool parsed = parse_and_validate_tx_from_blob(ptx.second.tx_blob, tx) ||
+          parse_and_validate_tx_base_from_blob(ptx.second.tx_blob, tx);
+
+        if (parsed && missed_set.erase(h))
         {
           found_hashes.push_back(h);
-          found_txs_vec.push_back(tx);
+          found_txs_vec.push_back(std::move(tx));
           heights.push_back(std::numeric_limits<uint64_t>::max());
           in_pool.push_back(true);
         }
