@@ -782,6 +782,21 @@ namespace cryptonote
       return false;
     }
 
+    // skip txes we already have before the full parse, which is costly
+    {
+      transaction tx_base;
+      binary_archive<false> ba{epee::strspan<std::uint8_t>(tx_blob)};
+      crypto::hash prunable_hash, txid;
+      if (tx_base.serialize_base(ba) && tx_base.version > 1 &&
+          calculate_transaction_prunable_hash(tx_base.version, blobdata_ref(tx_blob.data() + ba.getpos(), tx_blob.size() - ba.getpos()), prunable_hash) &&
+          get_pruned_transaction_hash(tx_base, prunable_hash, txid) &&
+          (m_mempool.have_tx(txid, relay_category::legacy) || m_blockchain_storage.have_tx(txid)))
+      {
+        LOG_PRINT_L2("tx " << txid << " already known");
+        return true;
+      }
+    }
+
     transaction tx;
     crypto::hash txid;
     if (!parse_and_validate_tx_from_blob(tx_blob, tx, txid, true))
