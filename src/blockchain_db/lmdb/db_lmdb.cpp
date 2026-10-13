@@ -4402,9 +4402,17 @@ std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> BlockchainLMDB::get
     for (std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>>::iterator i = histogram.begin(); i != histogram.end(); ++i) {
       uint64_t amount = i->first;
       uint64_t num_elems = std::get<0>(i->second);
+      const auto output_height = [&](uint64_t index) {
+        MDB_val_set(key, amount);
+        MDB_val_set(val, index);
+        const int ret = mdb_cursor_get(m_cur_output_amounts, &key, &val, MDB_GET_BOTH);
+        if (ret)
+          throw0(DB_ERROR(lmdb_error("Failed to get output height: ", ret).c_str()));
+        // pre_rct_outkey is a prefix of outkey
+        return ((const pre_rct_outkey *)val.mv_data)->data.height;
+      };
       while (num_elems > 0) {
-        const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-        const uint64_t height = get_tx_block_height(toi.first);
+        const uint64_t height = output_height(num_elems - 1);
         if (height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= blockchain_height)
           break;
         --num_elems;
@@ -4414,11 +4422,14 @@ std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> BlockchainLMDB::get
 
       if (recent_cutoff > 0)
       {
-        uint64_t recent = 0;
+        uint64_t recent = 0, ts_height = std::numeric_limits<uint64_t>::max(), ts = 0;
         while (num_elems > 0) {
-          const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-          const uint64_t height = get_tx_block_height(toi.first);
-          const uint64_t ts = get_block_timestamp(height);
+          const uint64_t height = output_height(num_elems - 1);
+          if (height != ts_height)
+          {
+            ts = get_block_timestamp(height);
+            ts_height = height;
+          }
           if (ts < recent_cutoff)
             break;
           --num_elems;
