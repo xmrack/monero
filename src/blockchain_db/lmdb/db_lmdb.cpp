@@ -2171,6 +2171,11 @@ bool BlockchainLMDB::prune_worker(int mode, uint32_t pruning_seed)
           commit_counter = 0;
         }
       }
+      else
+      {
+        // keyed by tx id, so every later entry is also within the tip
+        break;
+      }
     }
   }
   // A resumed operation still needs the historical pass after pruning newly matured tip records.
