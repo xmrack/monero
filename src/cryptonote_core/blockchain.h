@@ -44,6 +44,7 @@
 #include <boost/multi_index/member.hpp>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1340,6 +1341,8 @@ namespace cryptonote
      * @param tvc returned information about tx verification
      * @param valid_input_verification_id_inout a previously valid verID if non-null, set on input verification
      * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
+     * @param deferred_mix_ring if non-null, input proofs that need verifying are not verified; the mix ring
+     *        is returned here instead for the caller to pass to ver_input_proofs_rings()
      *
      * @return false if any validation step fails, otherwise true
      *
@@ -1354,7 +1357,8 @@ namespace cryptonote
     bool check_tx_inputs(transaction& tx,
       tx_verification_context &tvc,
       crypto::hash &valid_input_verification_id_inout,
-      uint64_t* pmax_used_block_height = NULL) const;
+      uint64_t* pmax_used_block_height = NULL,
+      std::optional<rct::ctkeyM>* deferred_mix_ring = nullptr) const;
 
     /**
      * @brief performs a blockchain reorganization according to the longest chain rule

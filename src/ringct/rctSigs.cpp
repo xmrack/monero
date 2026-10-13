@@ -1527,7 +1527,7 @@ namespace rct {
                   results[i] = verRctCLSAGSimple(message, rv.p.CLSAGs[i], rv.mixRing[i], pseudoOuts[i]);
               else
                   results[i] = verRctMGSimple(message, rv.p.MGs[i], rv.mixRing[i], pseudoOuts[i]);
-          });
+          }, true);
         }
         if (!waiter.wait())
           return false;

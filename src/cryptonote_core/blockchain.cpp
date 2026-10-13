@@ -3311,7 +3311,8 @@ bool Blockchain::expand_transaction_2(transaction &tx, const crypto::hash &tx_pr
 bool Blockchain::check_tx_inputs(transaction& tx,
   tx_verification_context &tvc,
   crypto::hash &valid_input_verification_id_inout,
-  uint64_t* pmax_used_block_height) const
+  uint64_t* pmax_used_block_height,
+  std::optional<rct::ctkeyM>* deferred_mix_ring) const
 {
   PERF_TIMER(check_tx_inputs);
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -3528,6 +3529,11 @@ bool Blockchain::check_tx_inputs(transaction& tx,
 
   // Verify ring signature input proofs
   valid_input_verification_id_inout = crypto::null_hash;
+  if (deferred_mix_ring)
+  {
+    deferred_mix_ring->emplace(std::move(pubkeys));
+    return true;
+  }
   if (!ver_input_proofs_rings(tx, pubkeys))
   {
     MERROR_VER("Failed to verify input ring signatures for tx " << txid);
@@ -4105,6 +4111,8 @@ leave:
   };
 
   key_images_container keys;
+  // index into txs, mix ring
+  std::vector<std::pair<size_t, rct::ctkeyM>> deferred_proofs;
 
   uint64_t fee_summary = 0;
   uint64_t t_checktx = 0;
@@ -4234,7 +4242,8 @@ leave:
     {
       // validate that transaction inputs and the keys spending them are correct.
       tx_verification_context tvc;
-      if(!check_tx_inputs(tx, tvc, valid_input_verification_id))
+      std::optional<rct::ctkeyM> mix_ring;
+      if(!check_tx_inputs(tx, tvc, valid_input_verification_id, nullptr, &mix_ring))
       {
         MERROR_VER("Block with id: " << id  << " has at least one transaction (id: " << tx_id << ") with wrong inputs.");
 
@@ -4245,12 +4254,50 @@ leave:
         return_txs_to_pool();
         return false;
       }
+      if (mix_ring)
+        deferred_proofs.emplace_back(txs.size() - 1, std::move(*mix_ring));
     }
 
     TIME_MEASURE_FINISH(cc);
     t_checktx += cc;
     fee_summary += fee;
     cumulative_block_weight += tx_weight;
+  }
+
+  // verify ring signatures for the whole block at once, so small txes still use every thread
+  if (!deferred_proofs.empty())
+  {
+    TIME_MEASURE_START(vp);
+    tools::threadpool &tpool = tools::threadpool::getInstanceForCompute();
+    // one job per thread bounds how deeply waiting jobs can nest
+    const size_t n_jobs = std::min<size_t>(deferred_proofs.size(), std::max(1u, tpool.get_max_concurrency()));
+    std::vector<uint8_t> valid(deferred_proofs.size(), 0);
+    tools::threadpool::waiter waiter(tpool);
+    for (size_t job = 0; job < n_jobs; ++job)
+    {
+      tpool.submit(&waiter, [&, job]() {
+        for (size_t i = job; i < deferred_proofs.size(); i += n_jobs)
+          valid[i] = ver_input_proofs_rings(txs[deferred_proofs[i].first].first, deferred_proofs[i].second);
+      });
+    }
+    waiter.wait();
+    TIME_MEASURE_FINISH(vp);
+    t_checktx += vp;
+
+    for (size_t i = 0; i < deferred_proofs.size(); ++i)
+    {
+      if (!valid[i])
+      {
+        const crypto::hash &tx_id = std::get<0>(txs_meta[deferred_proofs[i].first]);
+        MERROR_VER("Failed to verify input ring signatures for tx " << tx_id);
+        MERROR_VER("Block with id: " << id  << " has at least one transaction (id: " << tx_id << ") with wrong inputs.");
+        add_block_as_invalid(bl, id);
+        MERROR_VER("Block with id " << id << " added as invalid because of wrong inputs in transactions");
+        bvc.m_verifivation_failed = true;
+        return_txs_to_pool();
+        return false;
+      }
+    }
   }
 
   // if we were syncing pruned blocks
